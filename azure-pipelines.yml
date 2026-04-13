@@ -1,0 +1,70 @@
+# Azure Pipelines — Build & Test only
+# Triggers on pushes to main/master and on all pull requests.
+# No deployment steps — add a deploy stage when infrastructure is ready.
+
+trigger:
+  branches:
+    include:
+      - main
+      - master
+
+pr:
+  branches:
+    include:
+      - main
+      - master
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  MAVEN_CACHE_FOLDER: $(Pipeline.Workspace)/.m2/repository
+  MAVEN_OPTS: >-
+    -Dmaven.repo.local=$(MAVEN_CACHE_FOLDER)
+
+stages:
+  - stage: Build
+    displayName: Build & Test
+    jobs:
+      - job: BuildAndTest
+        displayName: Maven build and test
+        steps:
+          # Cache the local Maven repository to speed up subsequent runs
+          - task: Cache@2
+            displayName: Cache Maven repository
+            inputs:
+              key: 'maven | "$(Agent.OS)" | **/pom.xml'
+              restoreKeys: |
+                maven | "$(Agent.OS)"
+                maven
+              path: $(MAVEN_CACHE_FOLDER)
+
+          # Use Java 21 (matches pom.xml <java.version>)
+          - task: JavaToolInstaller@0
+            displayName: Use Java 21
+            inputs:
+              versionSpec: '21'
+              jdkArchitectureOption: x64
+              jdkSourceOption: PreInstalled
+
+          # Compile, run tests, and package the JAR
+          - task: Maven@4
+            displayName: mvn verify
+            inputs:
+              mavenPomFile: pom.xml
+              goals: verify
+              options: $(MAVEN_OPTS)
+              publishJUnitResults: true
+              testResultsFiles: '**/surefire-reports/TEST-*.xml'
+              javaHomeOption: JDKVersion
+              jdkVersionOption: '21'
+              mavenVersionOption: Default
+
+          # Publish the JAR as a build artifact for later use
+          - task: PublishBuildArtifacts@1
+            displayName: Publish JAR artifact
+            inputs:
+              PathtoPublish: target
+              ArtifactName: customer-care-api
+              publishLocation: Container
+

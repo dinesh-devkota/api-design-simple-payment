@@ -1,0 +1,76 @@
+openapi: 3.0.3
+
+info:
+  title: Customer Care API
+  description: |
+    REST API for the Customer Care domain.
+
+    **Iteration 1** — Hello World baseline.  
+    The `POST /one-time-payment` endpoint will be added in the next iteration
+    (see `ARCHITECTURE.md` §5 for the full contract).
+  version: 1.0.0-SNAPSHOT
+  contact:
+    name: Customer Care Engineering
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+tags:
+  - name: Health
+    description: Liveness / smoke-test endpoints
+
+paths:
+  /hello:
+    get:
+      tags:
+        - Health
+      summary: Hello World
+      description: >
+        Simple smoke-test endpoint. Returns a greeting string to confirm the
+        service is running and reachable.
+      operationId: hello
+      responses:
+        '200':
+          description: Service is up and running
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Hello from customer-care-api!
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  responses:
+    InternalServerError:
+      description: Unexpected server-side error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    ErrorResponse:
+      type: object
+      description: Standard error envelope returned for all non-2xx responses
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: '2026-04-13T10:15:30Z'
+        status:
+          type: integer
+          example: 500
+        error:
+          type: string
+          example: Internal Server Error
+        message:
+          type: string
+          example: An unexpected error occurred
+      required:
+        - timestamp
+        - status
+        - error
+        - message
+
