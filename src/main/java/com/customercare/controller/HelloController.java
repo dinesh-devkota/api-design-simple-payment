@@ -1,21 +1,21 @@
 package com.customercare.controller;
 
-import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.tags.Tag;
+import com.customercare.api.HealthApi;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-@Tag(name = "Health", description = "Liveness / smoke-test endpoints")
+/**
+ * Thin REST controller for the smoke-test endpoint.
+ *
+ * <p>Implements the contract-first {@link HealthApi} interface generated from
+ * {@code openapi.yaml}. The {@code @GetMapping("/hello")} and all OpenAPI
+ * annotations live on the generated interface.
+ */
 @RestController
-@RequestMapping("/hello")
-public class HelloController {
+public class HelloController implements HealthApi {
 
-    @Operation(summary = "Hello World", description = "Confirms the service is running and reachable.")
-    @GetMapping
+    @Override
     public ResponseEntity<String> hello() {
         return ResponseEntity.ok("Hello from customer-care-api!");
     }
 }
-
