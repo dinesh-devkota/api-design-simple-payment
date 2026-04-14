@@ -107,9 +107,9 @@ class PaymentControllerIntegrationTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         Map<?, ?> body = response.getBody();
         assertThat(body).isNotNull();
-        assertThat(((Number) body.get("matchPercentage")).intValue()).isEqualTo(3);
         assertThat(new BigDecimal(body.get("newBalance").toString()))
                 .isEqualByComparingTo("89.70");
+        assertThat(body.get("nextPaymentDueDate")).isNotNull();
     }
 
     @Test
@@ -123,9 +123,9 @@ class PaymentControllerIntegrationTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         Map<?, ?> body = response.getBody();
         assertThat(body).isNotNull();
-        assertThat(((Number) body.get("matchPercentage")).intValue()).isEqualTo(5);
         assertThat(new BigDecimal(body.get("newBalance").toString()))
                 .isEqualByComparingTo("421.25");
+        assertThat(body.get("nextPaymentDueDate")).isNotNull();
     }
 
     @Test
@@ -139,13 +139,13 @@ class PaymentControllerIntegrationTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         Map<?, ?> body = response.getBody();
         assertThat(body).isNotNull();
-        assertThat(((Number) body.get("matchPercentage")).intValue()).isEqualTo(1);
         assertThat(new BigDecimal(body.get("newBalance").toString()))
                 .isEqualByComparingTo("44.95");
+        assertThat(body.get("nextPaymentDueDate")).isNotNull();
     }
 
     @Test
-    @DisplayName("Response contains nextPaymentDueDate as ISO-8601 string")
+    @DisplayName("Response contains only newBalance and nextPaymentDueDate")
     void responseContainsDueDate() {
         ResponseEntity<Map> response = restTemplate.postForEntity(
                 "/one-time-payment",
@@ -153,8 +153,12 @@ class PaymentControllerIntegrationTest {
                 Map.class);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().get("nextPaymentDueDate")).isNotNull();
+        Map<?, ?> body = response.getBody();
+        assertThat(body).isNotNull();
+        assertThat(body.get("nextPaymentDueDate")).isNotNull();
+        assertThat(body.containsKey("matchPercentage")).isFalse();
+        assertThat(body.containsKey("previousBalance")).isFalse();
+        assertThat(body.containsKey("userId")).isFalse();
     }
 
     // -------------------------------------------------------------------------

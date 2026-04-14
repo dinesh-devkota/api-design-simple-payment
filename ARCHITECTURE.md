@@ -360,11 +360,6 @@ Content-Type: application/json
 
 ```json
 {
-  "userId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-  "previousBalance": 100.00,
-  "paymentAmount": 10.00,
-  "matchPercentage": 3,
-  "matchAmount": 0.30,
   "newBalance": 89.70,
   "nextPaymentDueDate": "2022-03-29"
 }
@@ -374,13 +369,8 @@ Content-Type: application/json
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `userId` | `String` | Echo of the requesting user |
-| `previousBalance` | `BigDecimal` | Balance before this payment |
-| `paymentAmount` | `BigDecimal` | The submitted payment |
-| `matchPercentage` | `int` | Applied match tier (1, 3, or 5) |
-| `matchAmount` | `BigDecimal` | Dollar value of the match |
-| `newBalance` | `BigDecimal` | Balance after payment + match deduction |
-| `nextPaymentDueDate` | `LocalDate` (ISO-8601 string) | Weekend-adjusted due date |
+| `newBalance` | `BigDecimal` | Updated balance after payment + match deduction |
+| `nextPaymentDueDate` | `LocalDate` (ISO-8601 string) | Weekend-adjusted due date, always 15 days from today |
 
 #### HTTP Status Codes
 

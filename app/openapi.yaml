@@ -100,23 +100,13 @@ paths:
                 $ref: '#/components/schemas/OneTimePaymentResponse'
               examples:
                 mid-tier:
-                  summary: Mid-tier result — $10 payment, 3 % match, weekday due date
+                  summary: Mid-tier result — $10 payment, weekday due date
                   value:
-                    userId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
-                    previousBalance: 100.00
-                    paymentAmount: 10.00
-                    matchPercentage: 3
-                    matchAmount: 0.30
                     newBalance: 89.70
                     nextPaymentDueDate: "2022-03-29"
                 high-tier:
-                  summary: High-tier result — $75 payment, 5 % match, weekend-shifted due date
+                  summary: High-tier result — $75 payment, weekend-shifted due date
                   value:
-                    userId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
-                    previousBalance: 500.00
-                    paymentAmount: 75.00
-                    matchPercentage: 5
-                    matchAmount: 3.75
                     newBalance: 421.25
                     nextPaymentDueDate: "2022-04-25"
         '400':
@@ -185,42 +175,17 @@ components:
       type: object
       description: Result of a successful one-time payment.
       required:
-        - userId
-        - previousBalance
-        - paymentAmount
-        - matchPercentage
-        - matchAmount
         - newBalance
         - nextPaymentDueDate
       properties:
-        userId:
-          type: string
-          description: Echo of the requesting user.
-          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
-        previousBalance:
-          type: number
-          description: Balance before this payment.
-          example: 100.00
-        paymentAmount:
-          type: number
-          description: The submitted payment amount.
-          example: 10.00
-        matchPercentage:
-          type: integer
-          description: Applied match tier — 1, 3, or 5.
-          example: 3
-        matchAmount:
-          type: number
-          description: Dollar value of the match deducted from the balance.
-          example: 0.30
         newBalance:
           type: number
-          description: Balance after payment + match deduction.
+          description: Updated account balance after payment and match deduction.
           example: 89.70
         nextPaymentDueDate:
           type: string
           format: date
-          description: Weekend-adjusted due date (ISO-8601).
+          description: Weekend-adjusted next payment due date (ISO-8601), always 15 days from today.
           example: "2022-03-29"
 
     ErrorResponse:
