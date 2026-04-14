@@ -60,11 +60,11 @@ stages:
               jdkVersionOption: '21'
               mavenVersionOption: Default
 
-          # Publish the JAR as a build artifact for later use
+          # Publish the executable fat JAR (produced by spring-boot-maven-plugin in bootstrap)
           - task: PublishBuildArtifacts@1
             displayName: Publish JAR artifact
             inputs:
-              PathtoPublish: target
+              PathtoPublish: bootstrap/target
               ArtifactName: customer-care-api
               publishLocation: Container
 

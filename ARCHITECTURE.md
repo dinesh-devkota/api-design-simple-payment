@@ -69,13 +69,13 @@ mvn clean verify
 ### 2 — Run locally
 
 ```bash
-mvn spring-boot:run
+mvn spring-boot:run -pl bootstrap
 ```
 
-Or run the packaged JAR directly:
+Or run the packaged fat JAR directly:
 
 ```bash
-java -jar target/customer-care-api-1.0.0-SNAPSHOT.jar
+java -jar bootstrap/target/bootstrap-1.0.0-SNAPSHOT.jar
 ```
 
 ### 3 — Verify it's up
@@ -87,13 +87,13 @@ java -jar target/customer-care-api-1.0.0-SNAPSHOT.jar
 | Swagger UI | Open `http://localhost:8080/swagger-ui.html` in a browser |
 | Raw OpenAPI spec | `curl http://localhost:8080/v3/api-docs` |
 
-### Running with Redis (Iteration 2)
+### Running with Redis
 
-Once the Redis data layer is added, start Redis before the application:
+Start Redis before the application:
 
 ```bash
 docker compose up -d          # starts redis:7-alpine on port 6379
-mvn spring-boot:run -Dspring-boot.run.profiles=local
+mvn spring-boot:run -pl bootstrap -Dspring-boot.run.profiles=local
 ```
 
 To stop Redis:
@@ -115,10 +115,12 @@ docker compose down
 | Language | Java | 21 (LTS) |
 | Framework | Spring Boot | 3.2.x |
 | Build Tool | Maven | 3.9.x |
+| Architecture | Hexagonal (Ports & Adapters) | — |
 | Web | Spring Web (Spring MVC) | (managed by Boot) |
 | Data | Spring Data Redis | (managed by Boot) |
 | Validation | Jakarta Bean Validation (Hibernate Validator) | (managed by Boot) |
 | Boilerplate reduction | Lombok | 1.18.x |
+| Mapping | MapStruct | 1.5.x |
 | Data Store | Redis | 7.x |
 | Embedded Redis (test) | `com.github.codemonstur:embedded-redis` | 1.4.x |
 | Unit Testing | JUnit 5 + Mockito | (managed by Boot) |
@@ -148,99 +150,117 @@ docker compose down
 - **Reporting** — SQL-based analytics on payment history, match distributions, and balance trends.
 - **Existing infrastructure** — Many enterprise environments already run Oracle with DBA support, backups, and monitoring in place.
 
-> **Migration path:** The service layer is coded against a `AccountRepository` interface. Swapping from a Redis implementation to a JPA/Oracle implementation requires only a new `@Repository` class — no controller or service changes.
+> **Migration path:** The domain defines an `AccountSpi` output port. The infra module provides the
+> Redis-backed implementation. Swapping to JPA/Oracle requires only a new infra adapter class —
+> the domain and app modules are untouched.
 
 ---
 
 ## 4. Project Structure
 
+The project follows **Hexagonal Architecture** (Ports & Adapters) and is split into four Maven modules. Each module has strict dependency rules enforced by Maven's build reactor.
+
 ```
-customer-care-api/
-├── src/
-│   ├── main/
-│   │   ├── java/com/customercare/
-│   │   │   ├── CustomerCareApplication.java            # Entry point (@SpringBootApplication)
-│   │   │   │
-│   │   │   ├── controller/
-│   │   │   │   └── PaymentController.java              # REST controller
-│   │   │   │
-│   │   │   ├── service/
-│   │   │   │   ├── PaymentService.java                 # Orchestration interface
-│   │   │   │   ├── MatchCalculationService.java        # Match-tier interface
-│   │   │   │   ├── DueDateCalculationService.java      # Due-date interface
-│   │   │   │   └── impl/
-│   │   │   │       ├── PaymentServiceImpl.java
-│   │   │   │       ├── MatchCalculationServiceImpl.java
-│   │   │   │       └── DueDateCalculationServiceImpl.java
-│   │   │   │
-│   │   │   ├── repository/
-│   │   │   │   └── AccountRepository.java              # Interface for account data access
-│   │   │   │
-│   │   │   ├── repository/redis/
-│   │   │   │   └── RedisAccountRepository.java         # Redis implementation
-│   │   │   │
-│   │   │   ├── model/
-│   │   │   │   └── Account.java                        # @RedisHash domain object
-│   │   │   │
-│   │   │   ├── dto/
-│   │   │   │   ├── request/
-│   │   │   │   │   └── OneTimePaymentRequest.java
-│   │   │   │   └── response/
-│   │   │   │       ├── OneTimePaymentResponse.java
-│   │   │   │       └── ErrorResponse.java
-│   │   │   │
-│   │   │   ├── exception/
-│   │   │   │   ├── AccountNotFoundException.java
-│   │   │   │   └── InvalidPaymentAmountException.java
-│   │   │   │
-│   │   │   ├── handler/
-│   │   │   │   └── GlobalExceptionHandler.java         # @RestControllerAdvice
-│   │   │   │
-│   │   │   ├── util/
-│   │   │   │   └── MoneyUtils.java                     # Rounding helpers
-│   │   │   │
-│   │   │   └── config/
-│   │   │       └── RedisConfig.java                    # RedisTemplate, connection config
-│   │   │
-│   │   └── resources/
-│   │       ├── application.yml
-│   │       ├── application-local.yml
-│   │       └── application-prod.yml
-│   │
-│   └── test/
-│       └── java/com/customercare/
-│           ├── service/
-│           │   ├── MatchCalculationServiceTest.java
-│           │   └── DueDateCalculationServiceTest.java
-│           ├── controller/
-│           │   └── PaymentControllerIntegrationTest.java
-│           └── util/
-│               └── MoneyUtilsTest.java
+customer-care-api/                          ← parent POM (packaging: pom)
 │
-├── docker-compose.yml          # Redis for local development
-├── ARCHITECTURE.md
-├── README.md
-└── pom.xml
+├── domain/                                 ← Pure business logic — no framework, no infra
+│   └── src/main/java/com/customercare/domain/
+│       ├── model/
+│       │   └── Account.java                # Plain domain object (no Redis annotations)
+│       ├── payment/
+│       │   ├── ProcessPaymentUseCase.java  # Primary port (inbound use-case interface)
+│       │   ├── ProcessPaymentService.java  # Use-case implementation (@Service)
+│       │   └── PaymentResult.java          # Immutable value object (record)
+│       ├── service/
+│       │   ├── MatchCalculationService.java
+│       │   ├── DueDateCalculationService.java
+│       │   └── impl/
+│       │       ├── MatchCalculationServiceImpl.java
+│       │       └── DueDateCalculationServiceImpl.java
+│       ├── spi/
+│       │   └── AccountSpi.java             # Secondary port (output port — persistence contract)
+│       └── exception/
+│           ├── AccountNotFoundException.java
+│           └── InvalidPaymentAmountException.java
+│
+├── infra/                                  ← Infrastructure adapters — depends on domain only
+│   └── src/main/java/com/customercare/infra/
+│       ├── config/
+│       │   └── RedisConfig.java            # RedisTemplate bean
+│       └── redis/
+│           ├── entity/
+│           │   └── AccountEntity.java      # @RedisHash persistence entity
+│           ├── mapper/
+│           │   └── AccountEntityMapper.java  # MapStruct: AccountEntity ↔ Account
+│           ├── repository/
+│           │   └── AccountRedisRepository.java  # Spring Data CrudRepository
+│           └── adapter/
+│               └── AccountAdapter.java     # Implements AccountSpi via Redis
+│
+├── app/                                    ← Driving adapters — depends on domain only
+│   ├── openapi.yaml                        # Single source of truth for the API contract
+│   └── src/main/java/com/customercare/app/
+│       ├── rest/
+│       │   ├── HelloController.java        # Implements generated HealthApi
+│       │   └── PaymentController.java      # Implements generated PaymentApi
+│       ├── mapper/
+│       │   └── PaymentResponseMapper.java  # MapStruct: PaymentResult → OneTimePaymentResponse
+│       └── handler/
+│           └── GlobalExceptionHandler.java # @RestControllerAdvice
+│
+└── bootstrap/                              ← Spring Boot entry point — wires all modules
+    └── src/
+        ├── main/
+        │   ├── java/com/customercare/
+        │   │   └── CustomerCareApplication.java  # @SpringBootApplication
+        │   └── resources/
+        │       ├── application.yml
+        │       ├── application-local.yml
+        │       └── application-prod.yml
+        └── test/
+            └── java/com/customercare/
+                ├── rest/
+                │   └── HelloControllerTest.java               # @WebMvcTest
+                └── controller/
+                    └── PaymentControllerIntegrationTest.java  # @SpringBootTest + embedded Redis
 ```
 
-### Key simplifications vs. a full JPA architecture
-
-- **No separate `User` entity** — the README only needs an account with a balance. A `userId` field on `Account` is sufficient. A `User` entity can be introduced when authentication/profile features are added.
-- **No `Payment` audit entity** — the README asks to return the updated balance, not to persist a payment log. An audit table is a production concern for the Oracle iteration.
-- **Single `AccountRepository` interface** — swappable implementations (Redis now, JPA/Oracle later) without touching business logic.
-
-### Layering rules
+### Module dependency rules
 
 ```
-Controller → Service → Repository (interface) → Redis / Oracle
-                ↑
-           Model / DTOs / Utils (shared horizontally)
+bootstrap → app + infra + domain   (wires everything)
+app       → domain                 (controllers call use-case ports; no infra knowledge)
+infra     → domain                 (adapter implements domain SPI; no app/DTO knowledge)
+domain    → (nothing internal)     (pure business logic; no Spring Data, no HTTP)
 ```
 
-- **Controllers** translate HTTP ↔ DTOs only; no business logic.
-- **Services** own all business rules; they depend on repository interfaces, not implementations.
-- **Repository interface** defines the contract; implementations are injected by Spring.
-- **Model objects** are never returned directly from controllers — always mapped to a DTO.
+OpenAPI-generated sources (`com.customercare.api.*`, `com.customercare.dto.*`) are produced
+during `mvn generate-sources` from `app/openapi.yaml` and are visible only inside the `app` module.
+
+### Hexagonal layering
+
+```
+          ┌─────────────────────────────┐
+          │         bootstrap           │  @SpringBootApplication — wires all beans
+          └─────────────┬───────────────┘
+                        │
+          ┌─────────────▼───────────────┐
+          │    app  (driving adapter)   │  REST controllers, mappers, exception handler
+          │    Generated contract DTOs  │  (com.customercare.dto — only here)
+          └─────────────┬───────────────┘
+                        │ ProcessPaymentUseCase (primary port)
+          ┌─────────────▼───────────────┐
+          │         domain              │  Business rules — no framework, no infra
+          │  ProcessPaymentService      │
+          │  MatchCalculationService    │
+          │  DueDateCalculationService  │
+          │  AccountSpi (secondary port)│
+          └─────────────┬───────────────┘
+                        │ AccountSpi (implemented by)
+          ┌─────────────▼───────────────┐
+          │  infra  (driven adapter)    │  Redis entity, mapper, repository, adapter
+          └─────────────────────────────┘
+```
 
 ---
 
@@ -250,12 +270,14 @@ Controller → Service → Repository (interface) → Redis / Oracle
 
 A single `Account` stored as a Redis Hash under key `account:{userId}`.
 
-#### `Account` (`@RedisHash("account")`)
+#### `Account` (domain model — plain POJO)
 
-| Field | Type | Redis Key | Notes |
-|-------|------|-----------|-------|
-| `userId` | `String` | `@Id` — becomes the hash key | Primary identifier |
-| `balance` | `BigDecimal` | stored as `String` in Redis | Scale 2, `>= 0` |
+| Field | Type | Notes |
+|-------|------|-------|
+| `userId` | `String` | Unique user identifier |
+| `balance` | `BigDecimal` | Current outstanding balance (scale 2) |
+
+The Redis persistence entity (`AccountEntity` in the `infra` module) carries `@RedisHash("account")` and `@Id`. MapStruct's `AccountEntityMapper` translates between the two.
 
 **Redis storage example:**
 
@@ -436,29 +458,29 @@ switch rawDueDate.getDayOfWeek():
 | 2022-05-01 | 2022-05-16 | Monday | 2022-05-16 |
 | 2022-05-08 | 2022-05-23 | Sunday | 2022-05-24 (Mon) |
 
-### 7.3 `PaymentService` (Orchestrator)
+### 7.3 `ProcessPaymentService` (Orchestrator)
 
-Controls the full one-time payment flow.
+Primary port implementation that controls the full one-time payment flow.
 
 ```
-interface PaymentService {
-    OneTimePaymentResponse processOneTimePayment(OneTimePaymentRequest request);
+interface ProcessPaymentUseCase {
+    PaymentResult process(String userId, BigDecimal paymentAmount);
 }
 ```
 
 **Step-by-step flow:**
 
 ```
-1. Validate: paymentAmount > 0         (guard clause → InvalidPaymentAmountException)
-2. Fetch Account by userId from Redis  (not found → AccountNotFoundException)
-3. Snapshot balanceBefore = account.getBalance()
+1. Validate: paymentAmount > 0              (guard clause → InvalidPaymentAmountException)
+2. Fetch Account via AccountSpi.findById()  (not found → AccountNotFoundException)
+3. Snapshot previousBalance = account.getBalance()
 4. matchAmount     = matchCalcService.calculateMatchAmount(paymentAmount)
 5. totalDeduction  = paymentAmount.add(matchAmount)
-6. newBalance      = balanceBefore.subtract(totalDeduction).setScale(2, HALF_UP)
+6. newBalance      = previousBalance.subtract(totalDeduction).setScale(2, HALF_UP)
 7. nextDueDate     = dueDateService.calculateDueDate(LocalDate.now())
 8. account.setBalance(newBalance)
-   accountRepository.save(account)     // writes back to Redis
-9. Build and return OneTimePaymentResponse
+   accountSpi.save(account)                 // persisted via infra adapter
+9. Build and return PaymentResult record
 ```
 
 > **Trade-off:** `LocalDate.now()` is called inside the service. In a production system this would be injected via a `Clock` bean to make unit tests deterministic.
@@ -537,12 +559,12 @@ Test all `DayOfWeek` outcomes:
 |-------------|-------------------|-------|
 | 2022-03-14 (Mon) | 2022-03-29 (Tue) | No shift |
 | 2022-04-08 | 2022-04-25 (Mon) | +15 = Sat → +2 |
-| 2022-05-08 | 2022-05-24 (Mon) | +15 = Sun → +1 |
+| 2022-05-07 | 2022-05-23 (Mon) | +15 = Sun → +1 |
 | Any weekday | weekday + 15 | No shift |
 
 ### 9.3 Integration Tests — `PaymentControllerIntegrationTest`
 
-Use `@SpringBootTest(webEnvironment = RANDOM_PORT)` with embedded Redis. Seed test data via a `@BeforeEach` setup method that writes accounts directly to Redis.
+Located in the `bootstrap` module (which depends on all other modules). Uses `@SpringBootTest(webEnvironment = RANDOM_PORT)` with embedded Redis started before the Spring context via `ApplicationContextInitializer`. Test data is seeded via `AccountRedisRepository`.
 
 Key scenarios:
 
@@ -556,7 +578,10 @@ Key scenarios:
 
 ### 9.4 Coverage Gate
 
-JaCoCo is configured to fail the build if line coverage drops below **80%** in the `service` and `util` packages.
+JaCoCo (configured in the `bootstrap` module) fails the build if line coverage drops below **80%** in:
+
+- `com.customercare.domain.service.*` (MatchCalculationService, DueDateCalculationService impls)
+- `com.customercare.domain.payment` (ProcessPaymentService)
 
 ---
 
@@ -607,7 +632,6 @@ spring:
 ### `docker-compose.yml` (local development)
 
 ```yaml
-version: "3.9"
 services:
   redis:
     image: redis:7-alpine
@@ -618,69 +642,29 @@ services:
 
 ### `pom.xml` — Key Dependencies
 
+The project uses a **parent POM** at the root with `<packaging>pom</packaging>` and four child modules. Dependencies are managed centrally in `<dependencyManagement>`.
+
 ```xml
-<!-- Spring Boot Parent -->
+<!-- Root parent POM -->
 <parent>
   <groupId>org.springframework.boot</groupId>
   <artifactId>spring-boot-starter-parent</artifactId>
   <version>3.2.5</version>
 </parent>
+<packaging>pom</packaging>
+<modules>
+  <module>domain</module>
+  <module>infra</module>
+  <module>app</module>
+  <module>bootstrap</module>
+</modules>
 
-<dependencies>
-  <!-- Web -->
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-web</artifactId>
-  </dependency>
-
-  <!-- Redis -->
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-data-redis</artifactId>
-  </dependency>
-
-  <!-- Validation -->
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-validation</artifactId>
-  </dependency>
-
-  <!-- Actuator (health, metrics) -->
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-actuator</artifactId>
-  </dependency>
-
-  <!-- Lombok -->
-  <dependency>
-    <groupId>org.projectlombok</groupId>
-    <artifactId>lombok</artifactId>
-    <optional>true</optional>
-  </dependency>
-
-  <!-- Embedded Redis (test only) -->
-  <dependency>
-    <groupId>com.github.codemonstur</groupId>
-    <artifactId>embedded-redis</artifactId>
-    <version>1.4.3</version>
-    <scope>test</scope>
-  </dependency>
-
-  <!-- Testing -->
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-test</artifactId>
-    <scope>test</scope>
-    <!-- Includes JUnit 5, Mockito, MockMvc, AssertJ -->
-  </dependency>
-</dependencies>
-
-<!-- JaCoCo coverage plugin -->
-<plugin>
-  <groupId>org.jacoco</groupId>
-  <artifactId>jacoco-maven-plugin</artifactId>
-  <version>0.8.11</version>
-</plugin>
+<!-- domain module: spring-context, lombok, spring-boot-starter-test -->
+<!-- infra  module: domain, spring-boot-starter-data-redis, mapstruct, lombok -->
+<!-- app    module: domain, spring-boot-starter-web, spring-boot-starter-validation,
+                    springdoc-openapi-starter-webmvc-ui, mapstruct, lombok -->
+<!-- bootstrap module: domain + infra + app, spring-boot-starter-actuator,
+                       embedded-redis (test), spring-boot-maven-plugin, jacoco -->
 ```
 
 ### Future: Oracle Dependencies (added during migration)
