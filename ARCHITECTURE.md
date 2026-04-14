@@ -692,9 +692,12 @@ The project uses a **parent POM** at the root with `<packaging>pom</packaging>` 
 | Repository interface pattern | Enables Redis → Oracle swap by changing only the implementation class | Hardcoded Redis calls in service — blocks future migration |
 | Single `Account` model (no `User` entity) | README only requires balance tracking by `userId`; YAGNI | Full `User` + `Account` — adds complexity with no current requirement |
 | No `Payment` audit entity in iteration 1 | README asks for a response, not persistence of payment history | Persist every payment — deferred to Oracle iteration where it makes more sense |
-| `LocalDate.now()` in service | Simple; acceptable for a first implementation | Inject a `Clock` bean for full testability |
+| Injected `Clock` in service | Full testability — unit tests pin the date to `2022-03-14`; production uses `Clock.systemDefaultZone()` | `LocalDate.now()` — simpler but untestable for date-dependent logic |
 | Separate `MatchCalculationService` and `DueDateCalculationService` | Single Responsibility; each is independently unit-testable and replaceable | Inline logic in `PaymentService` — harder to test in isolation |
 | `@RestControllerAdvice` global handler | Centralised error translation; controllers stay clean | Per-controller `@ExceptionHandler` — more boilerplate |
 | `userId` in request body | Clear and explicit; works without authentication infrastructure | Path variable (`/users/{userId}/one-time-payment`) — cleaner REST but requires URL routing decisions |
 | Embedded Redis for tests | No Docker dependency in CI; tests run anywhere Maven runs | Testcontainers — closer to prod but heavier setup |
+| No `@Transactional` (Redis iteration) | Redis single-key operations (`GET`, `SET`) are inherently atomic; a Spring `@Transactional` would add overhead with no benefit. **When migrating to Oracle/JPA**, add `@Transactional` to `ProcessPaymentService.process()` and configure a `PlatformTransactionManager`. | Add `@Transactional` now — unnecessary indirection for the current Redis backend |
+| `InsufficientBalanceException` guard | Prevents negative balances; returned as HTTP 422 (Unprocessable Entity) | Allow negative balance — risky in a financial domain |
+| `Idempotency-Key` header | Protects against duplicate payment submissions (network retries, double-clicks). Cached responses stored in Redis with 24-hour TTL. | No idempotency — simpler but unsafe for production payment traffic |
 

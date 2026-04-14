@@ -12,8 +12,7 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.context.ApplicationContextInitializer;
 import org.springframework.context.ConfigurableApplicationContext;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.*;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.support.TestPropertySourceUtils;
 import redis.embedded.RedisServer;
@@ -210,6 +209,51 @@ class PaymentControllerIntegrationTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().get("status")).isEqualTo(404);
+    }
+
+    // -------------------------------------------------------------------------
+    // Insufficient balance scenario
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("Insufficient balance — payment + match exceeds balance → 422")
+    void insufficientBalance() {
+        // user-low has $50.00. Payment $50 → 5% match = $2.50 → total $52.50 > $50.00
+        ResponseEntity<Map> response = restTemplate.postForEntity(
+                "/one-time-payment",
+                Map.of("userId", "user-low", "paymentAmount", 50.00),
+                Map.class);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(422);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().get("status")).isEqualTo(422);
+    }
+
+    // -------------------------------------------------------------------------
+    // Idempotency scenario
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("Idempotency — same key returns cached response without double-deducting")
+    void idempotencyReplay() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("Idempotency-Key", "unique-key-123");
+
+        HttpEntity<Map<String, Object>> request = new HttpEntity<>(
+                Map.of("userId", "user-001", "paymentAmount", 10.00), headers);
+
+        // First request processes the payment
+        ResponseEntity<Map> first = restTemplate.exchange(
+                "/one-time-payment", HttpMethod.POST, request, Map.class);
+        assertThat(first.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        // Second request with same key returns cached result (no double-deduction)
+        ResponseEntity<Map> second = restTemplate.exchange(
+                "/one-time-payment", HttpMethod.POST, request, Map.class);
+        assertThat(second.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(new BigDecimal(second.getBody().get("newBalance").toString()))
+                .isEqualByComparingTo(new BigDecimal(first.getBody().get("newBalance").toString()));
     }
 }
 

@@ -1,6 +1,7 @@
 package com.customercare.domain.payment;
 
 import com.customercare.domain.exception.AccountNotFoundException;
+import com.customercare.domain.exception.InsufficientBalanceException;
 import com.customercare.domain.exception.InvalidPaymentAmountException;
 import com.customercare.domain.model.Account;
 import com.customercare.domain.service.impl.DueDateCalculationServiceImpl;
@@ -14,6 +15,10 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -26,9 +31,15 @@ import static org.mockito.Mockito.*;
  *
  * <p>{@link AccountSpi} is mocked; real calculation services are used to validate
  * tier logic end-to-end without touching infrastructure.
+ * A fixed clock (March 14, 2022) is used for deterministic due-date assertions.
  */
 @ExtendWith(MockitoExtension.class)
 class ProcessPaymentServiceTest {
+
+    /** Fixed to March 14, 2022 — matches the spec example. */
+    private static final Clock FIXED_CLOCK = Clock.fixed(
+            ZonedDateTime.of(2022, 3, 14, 12, 0, 0, 0, ZoneId.of("UTC")).toInstant(),
+            ZoneId.of("UTC"));
 
     @Mock
     private AccountSpi accountSpi;
@@ -40,7 +51,8 @@ class ProcessPaymentServiceTest {
         useCase = new ProcessPaymentService(
                 accountSpi,
                 new MatchCalculationServiceImpl(),
-                new DueDateCalculationServiceImpl());
+                new DueDateCalculationServiceImpl(),
+                FIXED_CLOCK);
     }
 
     // -------------------------------------------------------------------------
@@ -78,14 +90,14 @@ class ProcessPaymentServiceTest {
     }
 
     @Test
-    @DisplayName("nextPaymentDueDate is populated")
+    @DisplayName("nextPaymentDueDate = March 29, 2022 (15 days from March 14, Tuesday — no shift)")
     void process_dueDatePresent() {
         when(accountSpi.findById("user-1"))
                 .thenReturn(Optional.of(new Account("user-1", new BigDecimal("100.00"))));
         when(accountSpi.save(any(Account.class))).thenAnswer(inv -> inv.getArgument(0));
 
         assertThat(useCase.process("user-1", new BigDecimal("10.00")).nextPaymentDueDate())
-                .isNotNull();
+                .isEqualTo(LocalDate.of(2022, 3, 29));
     }
 
     // -------------------------------------------------------------------------
@@ -116,6 +128,31 @@ class ProcessPaymentServiceTest {
         assertThatThrownBy(() -> useCase.process("unknown", new BigDecimal("10.00")))
                 .isInstanceOf(AccountNotFoundException.class)
                 .hasMessageContaining("unknown");
+    }
+
+    @Test
+    @DisplayName("Payment + match exceeds balance → InsufficientBalanceException")
+    void process_insufficientBalance() {
+        when(accountSpi.findById("user-low"))
+                .thenReturn(Optional.of(new Account("user-low", new BigDecimal("50.00"))));
+
+        // $50 payment → 5% match = $2.50 → total $52.50 > $50.00 balance
+        assertThatThrownBy(() -> useCase.process("user-low", new BigDecimal("50.00")))
+                .isInstanceOf(InsufficientBalanceException.class)
+                .hasMessageContaining("exceeds balance");
+        verify(accountSpi, never()).save(any(Account.class));
+    }
+
+    @Test
+    @DisplayName("Payment + match exactly equals balance → succeeds with $0.00")
+    void process_exactBalance() {
+        // $9.99 payment → 1% match = $0.10 → total $10.09
+        when(accountSpi.findById("user-exact"))
+                .thenReturn(Optional.of(new Account("user-exact", new BigDecimal("10.09"))));
+        when(accountSpi.save(any(Account.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        PaymentResult result = useCase.process("user-exact", new BigDecimal("9.99"));
+        assertThat(result.newBalance()).isEqualByComparingTo("0.00");
     }
 }
 

@@ -37,3 +37,72 @@ Lastly, no one can have a payment due on a weekend (since that's a great way to 
 For example, imagine someone with a $100 balance that makes a $10 one-time payment on March 14, 2022. They will have a new balance of $89.70 (their $10 payment plus 3% of $10, which is $0.30) and a next payment due date of March 29, 2022.
 
 Similarly, someone with a $500 balance that makes a $75 one-time payment on April 8, 2022 will have a new balance of $421.25 (their $75 payment plus 5% of $75, which is $3.75) and a next payment due date of April 25, 2022.
+
+---
+
+## Implementation
+
+### How to run
+
+**Prerequisites:** Java 21, Maven 3.9+, Docker
+
+```bash
+# Start Redis
+docker-compose up -d
+
+# Build and start the service
+mvn spring-boot:run -pl bootstrap
+```
+
+Service is available at `http://localhost:8080`.  
+Interactive API docs: `http://localhost:8080/swagger-ui.html`
+
+```bash
+# Run all tests (unit + integration; no Docker needed — tests use embedded Redis)
+mvn verify
+```
+
+### Architecture
+
+The project uses **Hexagonal Architecture** across four Maven modules:
+
+| Module      | Responsibility                                               |
+|-------------|--------------------------------------------------------------|
+| `domain`    | Pure business logic — match tiers, due-date rules, use-case |
+| `app`       | REST controllers, mappers, global exception handler          |
+| `infra`     | Redis adapter (`AccountAdapter`), Spring Data repository     |
+| `bootstrap` | Spring Boot entry point, wires all modules together          |
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full diagram.
+
+The **API contract** is defined in [`app/openapi.yaml`](app/openapi.yaml) (contract-first).  
+Java DTOs and API interfaces are generated from it at compile time — do **not** edit them by hand.
+
+### Endpoint
+
+**`POST /one-time-payment`**
+
+Request:
+```json
+{ "userId": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "paymentAmount": 10.00 }
+```
+
+Response `200 OK`:
+```json
+{ "newBalance": 89.70, "nextPaymentDueDate": "2022-03-29" }
+```
+
+Error responses (`400`, `404`, `500`) use a standard envelope:
+```json
+{
+  "timestamp": "2026-04-13T10:15:30Z",
+  "status": 400,
+  "error": "Bad Request",
+  "message": "Validation failed",
+  "errors": ["paymentAmount: paymentAmount must be greater than 0"]
+}
+```
+
+### Test coverage
+
+See [`TEST_SCENARIOS.md`](TEST_SCENARIOS.md) for the full input/expected-output table for every test case.

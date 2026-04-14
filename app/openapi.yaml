@@ -69,6 +69,16 @@ paths:
         If that date falls on a **Saturday or Sunday** it is moved forward to the
         following **Monday**.
       operationId: oneTimePayment
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: >
+            Unique key to prevent duplicate payment processing. If a request
+            with the same key was already processed within 24 hours, the
+            cached response is returned without re-processing the payment.
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -133,6 +143,17 @@ paths:
                 status: 404
                 error: "Not Found"
                 message: "Account not found for userId: 3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        '422':
+          description: Payment plus match exceeds available balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                timestamp: "2026-04-13T10:15:30Z"
+                status: 422
+                error: "Unprocessable Entity"
+                message: "Payment $50.00 + match $2.50 exceeds balance $50.00"
         '500':
           $ref: '#/components/responses/InternalServerError'
 
