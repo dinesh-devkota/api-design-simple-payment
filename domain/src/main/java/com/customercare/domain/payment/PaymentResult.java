@@ -16,6 +16,7 @@ import java.time.LocalDate;
  * @param matchAmount          dollar amount matched
  * @param newBalance           account balance after payment + match deduction
  * @param nextPaymentDueDate   weekend-adjusted next payment due date
+ * @param paymentDate          server-recorded date the payment was processed
  */
 public record PaymentResult(
         String     userId,
@@ -24,6 +25,7 @@ public record PaymentResult(
         int        matchPercentage,
         BigDecimal matchAmount,
         BigDecimal newBalance,
-        LocalDate  nextPaymentDueDate) {
+        LocalDate  nextPaymentDueDate,
+        LocalDate  paymentDate) {
 }
 

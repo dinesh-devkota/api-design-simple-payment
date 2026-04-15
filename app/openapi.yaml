@@ -112,13 +112,17 @@ paths:
                 mid-tier:
                   summary: Mid-tier result — $10 payment, weekday due date
                   value:
+                    previousBalance: 100.00
                     newBalance: 89.70
                     nextPaymentDueDate: "2022-03-29"
+                    paymentDate: "2022-03-14"
                 high-tier:
                   summary: High-tier result — $75 payment, weekend-shifted due date
                   value:
+                    previousBalance: 500.00
                     newBalance: 421.25
                     nextPaymentDueDate: "2022-04-25"
+                    paymentDate: "2022-04-08"
         '400':
           description: Validation failure or invalid payment amount
           content:
@@ -196,9 +200,15 @@ components:
       type: object
       description: Result of a successful one-time payment.
       required:
+        - previousBalance
         - newBalance
         - nextPaymentDueDate
+        - paymentDate
       properties:
+        previousBalance:
+          type: number
+          description: Account balance before the payment was applied.
+          example: 100.00
         newBalance:
           type: number
           description: Updated account balance after payment and match deduction.
@@ -208,6 +218,11 @@ components:
           format: date
           description: Weekend-adjusted next payment due date (ISO-8601), always 15 days from today.
           example: "2022-03-29"
+        paymentDate:
+          type: string
+          format: date
+          description: Server-recorded date on which the payment was processed (ISO-8601).
+          example: "2022-03-14"
 
     ErrorResponse:
       type: object

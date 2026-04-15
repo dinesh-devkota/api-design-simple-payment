@@ -58,7 +58,8 @@ public class ProcessPaymentService implements ProcessPaymentUseCase {
         BigDecimal newBalance      = previousBalance
                                          .subtract(totalDeduction)
                                          .setScale(2, RoundingMode.HALF_UP);
-        LocalDate  nextDueDate     = dueDateCalculationService.calculateDueDate(LocalDate.now(clock));
+        LocalDate  today           = LocalDate.now(clock);
+        LocalDate  nextDueDate     = dueDateCalculationService.calculateDueDate(today);
 
         account.setBalance(newBalance);
         accountSpi.save(account);
@@ -73,7 +74,8 @@ public class ProcessPaymentService implements ProcessPaymentUseCase {
                 matchPercentage,
                 matchAmount,
                 newBalance,
-                nextDueDate);
+                nextDueDate,
+                today);
     }
 }
 

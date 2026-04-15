@@ -57,6 +57,20 @@ mvn spring-boot:run -pl bootstrap
 Service is available at `http://localhost:8080`.  
 Interactive API docs: `http://localhost:8080/swagger-ui.html`
 
+#### Redis Insight (GUI)
+
+`docker-compose up -d` also starts **RedisInsight**, a browser-based Redis GUI.
+
+1. Open `http://localhost:5540` in your browser.
+2. Click **Add Redis Database**.
+3. Fill in the connection details:
+   - **Host:** `127.0.0.1`
+   - **Port:** `6379`
+   - **Database alias:** anything you like (e.g. `customer-care-local`)
+4. Click **Add Redis Database** to confirm.
+
+You can now browse keys, run raw commands, and inspect the data stored by the API.
+
 ```bash
 # Run all tests (unit + integration; no Docker needed — tests use embedded Redis)
 mvn verify
@@ -89,7 +103,12 @@ Request:
 
 Response `200 OK`:
 ```json
-{ "newBalance": 89.70, "nextPaymentDueDate": "2022-03-29" }
+{
+  "previousBalance": 100.00,
+  "newBalance": 89.70,
+  "nextPaymentDueDate": "2022-03-29",
+  "paymentDate": "2022-03-14"
+}
 ```
 
 Error responses (`400`, `404`, `500`) use a standard envelope:

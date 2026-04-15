@@ -144,8 +144,8 @@ class PaymentControllerIntegrationTest {
     }
 
     @Test
-    @DisplayName("Response contains only newBalance and nextPaymentDueDate")
-    void responseContainsDueDate() {
+    @DisplayName("Response contains previousBalance, newBalance, nextPaymentDueDate and paymentDate")
+    void responseContainsExpectedFields() {
         ResponseEntity<Map> response = restTemplate.postForEntity(
                 "/one-time-payment",
                 Map.of("userId", "user-001", "paymentAmount", 10.00),
@@ -155,8 +155,10 @@ class PaymentControllerIntegrationTest {
         Map<?, ?> body = response.getBody();
         assertThat(body).isNotNull();
         assertThat(body.get("nextPaymentDueDate")).isNotNull();
+        assertThat(body.get("paymentDate")).isNotNull();
+        assertThat(new BigDecimal(body.get("previousBalance").toString()))
+                .isEqualByComparingTo("100.00");
         assertThat(body.containsKey("matchPercentage")).isFalse();
-        assertThat(body.containsKey("previousBalance")).isFalse();
         assertThat(body.containsKey("userId")).isFalse();
     }
 
