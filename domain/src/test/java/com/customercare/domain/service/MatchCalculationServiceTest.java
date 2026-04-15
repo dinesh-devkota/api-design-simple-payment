@@ -25,11 +25,15 @@ class MatchCalculationServiceTest {
 
     @ParameterizedTest(name = "amount={0} → pct={1}")
     @CsvSource({
-            "0.01,  1",
-            "9.99,  1",
-            "10.00, 3",
-            "49.99, 3",
-            "50.00, 5",
+            // Low tier: 0 < x < 10
+            "0.01,  1",   // minimum valid payment
+            "9.99,  1",   // low-tier max
+            // Mid tier: 10 <= x < 50
+            "10.00, 3",   // mid-tier min (spec boundary)
+            "49.99, 3",   // mid-tier max
+            // High tier: x >= 50
+            "50.00, 5",   // high-tier min (spec boundary)
+            "75.00, 5",   // spec example ($75 payment)
             "100.00, 5",
             "999.99, 5"
     })
@@ -41,11 +45,15 @@ class MatchCalculationServiceTest {
 
     @ParameterizedTest(name = "amount={0} → matchAmount={1}")
     @CsvSource({
+            // Low tier 1%: note $0.01 * 1% = $0.0001 → rounds to $0.00 (HALF_UP, sub-cent)
             "0.01,  0.00",
-            "9.99,  0.10",
-            "10.00, 0.30",
-            "49.99, 1.50",
+            "9.99,  0.10",  // 9.99 * 1% = 0.0999 → 0.10 (HALF_UP)
+            // Mid tier 3%
+            "10.00, 0.30",  // spec example: $10 payment → $0.30 match
+            "49.99, 1.50",  // 49.99 * 3% = 1.4997 → 1.50 (HALF_UP)
+            // High tier 5%
             "50.00, 2.50",
+            "75.00, 3.75",  // spec example: $75 payment → $3.75 match
             "100.00, 5.00"
     })
     @DisplayName("calculateMatchAmount — tier boundary table")

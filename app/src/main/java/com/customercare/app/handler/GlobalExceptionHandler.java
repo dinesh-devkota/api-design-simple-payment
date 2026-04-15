@@ -19,7 +19,8 @@ import java.util.List;
  * Centralised exception → HTTP response mapping.
  *
  * <p>Handles domain exceptions ({@link AccountNotFoundException},
- * {@link InvalidPaymentAmountException}) and Spring validation exceptions.
+ * {@link InvalidPaymentAmountException}, {@link InsufficientBalanceException})
+ * and Spring validation/catch-all exceptions.
  * {@link ErrorResponse} is generated from {@code openapi.yaml}.
  */
 @Slf4j

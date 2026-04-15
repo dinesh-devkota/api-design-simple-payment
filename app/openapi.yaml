@@ -87,19 +87,19 @@ paths:
               $ref: '#/components/schemas/OneTimePaymentRequest'
             examples:
               low-tier:
-                summary: Low-tier match — 1 % ($5 payment)
+                summary: "Low-tier match — 1% ($5 payment) — user-low seeded with $50.00"
                 value:
-                  userId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                  userId: "user-low"
                   paymentAmount: 5.00
               mid-tier:
-                summary: Mid-tier match — 3 % ($10 payment)
+                summary: "Mid-tier match — 3% ($10 payment) — user-001 seeded with $100.00"
                 value:
-                  userId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                  userId: "user-001"
                   paymentAmount: 10.00
               high-tier:
-                summary: High-tier match — 5 % ($75 payment)
+                summary: "High-tier match — 5% ($75 payment) — user-002 seeded with $500.00"
                 value:
-                  userId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                  userId: "user-002"
                   paymentAmount: 75.00
       responses:
         '200':
@@ -189,7 +189,7 @@ components:
           type: string
           minLength: 1
           description: Identifies the account to apply the payment to.
-          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+          example: "user-001"
         paymentAmount:
           type: number
           minimum: 0.01

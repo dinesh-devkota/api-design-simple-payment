@@ -85,6 +85,7 @@ class PaymentControllerIntegrationTest {
 
     @BeforeEach
     void setUp() {
+
         accountRedisRepository.deleteAll();
         accountRedisRepository.save(new AccountEntity("user-001", new BigDecimal("100.00")));
         accountRedisRepository.save(new AccountEntity("user-002", new BigDecimal("500.00")));
@@ -142,6 +143,13 @@ class PaymentControllerIntegrationTest {
                 .isEqualByComparingTo("44.95");
         assertThat(body.get("nextPaymentDueDate")).isNotNull();
     }
+
+    // -------------------------------------------------------------------------
+    // Weekend due-date shift scenarios — covered at domain layer:
+    //   ProcessPaymentServiceTest  (process_dueDateSaturdayShiftedToMonday / SundayShiftedToMonday)
+    //   DueDateCalculationServiceTest (full parametrized table)
+    // The integration test only verifies the fields are present and wired through.
+    // -------------------------------------------------------------------------
 
     @Test
     @DisplayName("Response contains previousBalance, newBalance, nextPaymentDueDate and paymentDate")
@@ -258,4 +266,3 @@ class PaymentControllerIntegrationTest {
                 .isEqualByComparingTo(new BigDecimal(first.getBody().get("newBalance").toString()));
     }
 }
-

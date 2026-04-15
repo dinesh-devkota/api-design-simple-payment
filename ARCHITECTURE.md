@@ -18,6 +18,9 @@
 8. [Error Handling](#8-error-handling)
 9. [Testing Strategy](#9-testing-strategy)
 10. [Configuration](#10-configuration)
+11. [Observability & Logging](#11-observability--logging)
+12. [Idempotency](#12-idempotency)
+13. [Concurrency & Transaction Safety](#13-concurrency--transaction-safety)
 
 ---
 
@@ -50,11 +53,13 @@ When a one-time payment is submitted:
 
 ### Prerequisites
 
-| Tool | Version | Check |
-|------|---------|-------|
-| Java (JDK) | 21 | `java -version` |
-| Maven | 3.9.x | `mvn -version` |
-| Docker *(iteration 2 only)* | 20+ | `docker -version` |
+| Tool | Version | Check | Notes |
+|------|---------|-------|-------|
+| Java (JDK) | 21 | `java -version` | Must be a full JDK, not just JRE |
+| Maven | 3.9.x | `mvn -version` | — |
+| Docker Desktop | 4.x+ | `docker info` | Provides Docker Engine + Compose. **Redis runs as a Docker container — no separate Redis install required.** Must be running before `docker compose up`. |
+
+> **Windows / Mac:** Docker Desktop must be running as an application before any `docker` commands will work. If `docker info` returns an error, launch Docker Desktop from the Start menu / Applications folder first.
 
 ### 1 — Clone & build
 
@@ -89,20 +94,43 @@ java -jar bootstrap/target/bootstrap-1.0.0-SNAPSHOT.jar
 
 ### Running with Redis
 
-Start Redis before the application:
+Start Docker Desktop, then:
 
 ```bash
-docker compose up -d          # starts redis:7-alpine on port 6379
+docker compose up -d          # starts redis:7-alpine on port 6379 + RedisInsight on port 5540
 mvn spring-boot:run -pl bootstrap -Dspring-boot.run.profiles=local
 ```
 
-To stop Redis:
+`docker compose up -d` starts two containers (from `docker-compose.yml`):
+
+| Container | Image | Port | Purpose |
+|-----------|-------|------|---------|
+| `customer-care-redis` | `redis:7-alpine` | `6379` | Redis data store |
+| `customer-care-redisinsight` | `redis/redisinsight:latest` | `5540` | Browser-based Redis GUI |
+
+**RedisInsight** — open `http://localhost:5540`, click **Add Redis Database**, set host `127.0.0.1` port `6379` to inspect keys live while the API runs.
+
+> **Seed demo accounts before using Swagger** — run the seed script once after `docker compose up -d`:
+>
+> ```bash
+> bash scripts/seed-local-data.sh
+> ```
+>
+> | `userId` | Balance | Best example payment |
+> |----------|---------|---------------------|
+> | `user-001` | `$100.00` | `$10.00` → 3% match → new balance `$89.70` |
+> | `user-002` | `$500.00` | `$75.00` → 5% match → new balance `$421.25` |
+> | `user-low` | `$50.00` | `$5.00` → 1% match → new balance `$44.95` |
+>
+> The script uses `docker exec redis-cli` — no seed data ever touches Java source code.
+
+To stop all containers:
 
 ```bash
 docker compose down
 ```
 
-> Tests always use **embedded Redis** — no Docker required to run `mvn verify`.
+> **Tests never need Docker** — `mvn verify` uses embedded Redis and runs anywhere Maven runs.
 
 ---
 
@@ -178,9 +206,11 @@ customer-care-api/                          ← parent POM (packaging: pom)
 │       │       ├── MatchCalculationServiceImpl.java
 │       │       └── DueDateCalculationServiceImpl.java
 │       ├── spi/
-│       │   └── AccountSpi.java             # Secondary port (output port — persistence contract)
+│       │   ├── AccountSpi.java             # Secondary port — persistence contract
+│       │   └── IdempotencyStoreSpi.java    # Secondary port — idempotency key-value store
 │       └── exception/
 │           ├── AccountNotFoundException.java
+│           ├── InsufficientBalanceException.java
 │           └── InvalidPaymentAmountException.java
 │
 ├── infra/                                  ← Infrastructure adapters — depends on domain only
@@ -194,8 +224,9 @@ customer-care-api/                          ← parent POM (packaging: pom)
 │           │   └── AccountEntityMapper.java  # MapStruct: AccountEntity ↔ Account
 │           ├── repository/
 │           │   └── AccountRedisRepository.java  # Spring Data CrudRepository
-│           └── adapter/
-│               └── AccountAdapter.java     # Implements AccountSpi via Redis
+           └── adapter/
+               ├── AccountAdapter.java          # Implements AccountSpi via Redis
+               └── RedisIdempotencyStore.java   # Implements IdempotencyStoreSpi; 24-hour TTL
 │
 ├── app/                                    ← Driving adapters — depends on domain only
 │   ├── openapi.yaml                        # Single source of truth for the API contract
@@ -203,6 +234,8 @@ customer-care-api/                          ← parent POM (packaging: pom)
 │       ├── rest/
 │       │   ├── HelloController.java        # Implements generated HealthApi
 │       │   └── PaymentController.java      # Implements generated PaymentApi
+│       ├── idempotency/
+│       │   └── IdempotencyGuard.java       # Cache-check/execute/store abstraction
 │       ├── mapper/
 │       │   └── PaymentResponseMapper.java  # MapStruct: PaymentResult → OneTimePaymentResponse
 │       └── handler/
@@ -212,7 +245,9 @@ customer-care-api/                          ← parent POM (packaging: pom)
     └── src/
         ├── main/
         │   ├── java/com/customercare/
-        │   │   └── CustomerCareApplication.java  # @SpringBootApplication
+        │   │   ├── CustomerCareApplication.java  # @SpringBootApplication
+        │   │   └── config/
+        │   │       └── ClockConfig.java          # Clock bean (fixed or system)
         │   └── resources/
         │       ├── application.yml
         │       ├── application-local.yml
@@ -223,6 +258,9 @@ customer-care-api/                          ← parent POM (packaging: pom)
                 │   └── HelloControllerTest.java               # @WebMvcTest
                 └── controller/
                     └── PaymentControllerIntegrationTest.java  # @SpringBootTest + embedded Redis
+
+scripts/
+└── seed-local-data.sh                      ← One-time Redis seed for local dev (outside production code)
 ```
 
 ### Module dependency rules
@@ -340,6 +378,7 @@ When migrating to Oracle, the model expands to support full audit and relational
 ```
 POST /one-time-payment
 Content-Type: application/json
+Idempotency-Key: <client-generated UUID>   (optional)
 ```
 
 ```json
@@ -356,12 +395,16 @@ Content-Type: application/json
 | `userId` | `String` | `@NotBlank` | Identifies the account to apply the payment to |
 | `paymentAmount` | `BigDecimal` | `@NotNull`, `@DecimalMin("0.01")` | Payment amount in USD; must be > $0 |
 
+**`Idempotency-Key` header** (optional): a client-generated unique string (UUID recommended). If supplied, the first successful response is cached for 24 hours. Subsequent requests with the same key return the cached response without reprocessing. See §12 for full details.
+
 #### Response — `200 OK`
 
 ```json
 {
+  "previousBalance": 100.00,
   "newBalance": 89.70,
-  "nextPaymentDueDate": "2022-03-29"
+  "nextPaymentDueDate": "2022-03-29",
+  "paymentDate": "2022-03-14"
 }
 ```
 
@@ -369,8 +412,10 @@ Content-Type: application/json
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `previousBalance` | `BigDecimal` | Account balance before the payment was applied |
 | `newBalance` | `BigDecimal` | Updated balance after payment + match deduction |
-| `nextPaymentDueDate` | `LocalDate` (ISO-8601 string) | Weekend-adjusted due date, always 15 days from today |
+| `nextPaymentDueDate` | `LocalDate` (ISO-8601 string) | Weekend-adjusted due date, 15 days from the payment date |
+| `paymentDate` | `LocalDate` (ISO-8601 string) | Server-recorded date the payment was processed |
 
 #### HTTP Status Codes
 
@@ -379,6 +424,7 @@ Content-Type: application/json
 | `200 OK` | Payment processed successfully |
 | `400 Bad Request` | Validation failure (e.g. `paymentAmount <= 0`, missing `userId`) |
 | `404 Not Found` | `userId` or associated account does not exist |
+| `422 Unprocessable Entity` | Payment amount + match exceeds the account balance |
 | `500 Internal Server Error` | Unexpected server-side error |
 
 ---
@@ -439,14 +485,17 @@ switch rawDueDate.getDayOfWeek():
     default  → return rawDueDate
 ```
 
-**Examples:**
+**Examples (matching the parameterized unit test — consecutive 2026-04-10→16 block):**
 
 | Payment Date | Raw +15 | Day | Adjusted Due Date |
 |-------------|---------|-----|------------------|
-| 2022-03-14 | 2022-03-29 | Tuesday | 2022-03-29 |
-| 2022-04-08 | 2022-04-23 | Saturday | 2022-04-25 (Mon) |
-| 2022-05-01 | 2022-05-16 | Monday | 2022-05-16 |
-| 2022-05-08 | 2022-05-23 | Sunday | 2022-05-24 (Mon) |
+| 2026-04-10 (Fri) | 2026-04-25 | Saturday | 2026-04-27 (Mon +2) |
+| 2026-04-11 (Sat) | 2026-04-26 | Sunday | 2026-04-27 (Mon +1) |
+| 2026-04-12 (Sun) | 2026-04-27 | Monday | 2026-04-27 (no shift) |
+| 2026-04-13 (Mon) | 2026-04-28 | Tuesday | 2026-04-28 (no shift) |
+| 2026-04-14 (Tue) | 2026-04-29 | Wednesday | 2026-04-29 (no shift) |
+| 2026-04-15 (Wed) | 2026-04-30 | Thursday | 2026-04-30 (no shift) |
+| 2026-04-16 (Thu) | 2026-05-01 | Friday | 2026-05-01 (no shift) |
 
 ### 7.3 `ProcessPaymentService` (Orchestrator)
 
@@ -466,14 +515,16 @@ interface ProcessPaymentUseCase {
 3. Snapshot previousBalance = account.getBalance()
 4. matchAmount     = matchCalcService.calculateMatchAmount(paymentAmount)
 5. totalDeduction  = paymentAmount.add(matchAmount)
-6. newBalance      = previousBalance.subtract(totalDeduction).setScale(2, HALF_UP)
-7. nextDueDate     = dueDateService.calculateDueDate(LocalDate.now())
-8. account.setBalance(newBalance)
-   accountSpi.save(account)                 // persisted via infra adapter
-9. Build and return PaymentResult record
+6. Guard: totalDeduction > previousBalance  (→ InsufficientBalanceException)
+7. newBalance      = previousBalance.subtract(totalDeduction).setScale(2, HALF_UP)
+8. today           = LocalDate.now(clock)
+   nextDueDate     = dueDateService.calculateDueDate(today)
+9. account.setBalance(newBalance)
+   accountSpi.save(account)
+10. Build and return PaymentResult record
 ```
 
-> **Trade-off:** `LocalDate.now()` is called inside the service. In a production system this would be injected via a `Clock` bean to make unit tests deterministic.
+> **`Clock` injection:** `LocalDate.now(clock)` uses an injected `java.time.Clock` bean so unit tests can pin the date without touching production code. Production wires `Clock.systemDefaultZone()`. See §9.4 and the Appendix for details.
 
 ---
 
@@ -485,6 +536,7 @@ interface ProcessPaymentUseCase {
 |-----------|------------|-------------|
 | `AccountNotFoundException` | 404 | `userId` not found in Redis |
 | `InvalidPaymentAmountException` | 400 | `paymentAmount <= 0` |
+| `InsufficientBalanceException` | 422 | `paymentAmount + matchAmount > balance` |
 
 ### `GlobalExceptionHandler`
 
@@ -507,6 +559,7 @@ Annotated with `@RestControllerAdvice`. Catches all known exceptions and maps th
 | `status` | `int` | HTTP status code |
 | `error` | `String` | HTTP status reason phrase |
 | `message` | `String` | Human-readable description |
+| `errors` | `List<String>` | Field-level constraint messages; populated only on `400` validation failures, absent otherwise |
 
 A catch-all handler for `Exception.class` returns `500 Internal Server Error` with a generic message so that internal stack traces are never leaked to the client.
 
@@ -543,14 +596,17 @@ Test every tier boundary with explicit `BigDecimal` values:
 
 ### 9.2 Unit Tests — `DueDateCalculationServiceTest`
 
-Test all `DayOfWeek` outcomes:
+Parameterized test covering all `DayOfWeek` outcomes using a consecutive one-week block (2026-04-10 → 2026-04-16). Because 15 mod 7 = 1 this block steps the result day-of-week forward by exactly one, guaranteeing all seven cases are hit:
 
-| Payment Date | Expected Due Date | Notes |
-|-------------|-------------------|-------|
-| 2022-03-14 (Mon) | 2022-03-29 (Tue) | No shift |
-| 2022-04-08 | 2022-04-25 (Mon) | +15 = Sat → +2 |
-| 2022-05-07 | 2022-05-23 (Mon) | +15 = Sun → +1 |
-| Any weekday | weekday + 15 | No shift |
+| Payment Date | Raw +15 | Day of Week | Expected Due Date |
+|-------------|---------|-------------|------------------|
+| `2026-04-10` (Fri) | `2026-04-25` | Saturday | `2026-04-27` (Mon +2) |
+| `2026-04-11` (Sat) | `2026-04-26` | Sunday | `2026-04-27` (Mon +1) |
+| `2026-04-12` (Sun) | `2026-04-27` | Monday | `2026-04-27` (no shift) |
+| `2026-04-13` (Mon) | `2026-04-28` | Tuesday | `2026-04-28` (no shift) |
+| `2026-04-14` (Tue) | `2026-04-29` | Wednesday | `2026-04-29` (no shift) |
+| `2026-04-15` (Wed) | `2026-04-30` | Thursday | `2026-04-30` (no shift) |
+| `2026-04-16` (Thu) | `2026-05-01` | Friday | `2026-05-01` (no shift) |
 
 ### 9.3 Integration Tests — `PaymentControllerIntegrationTest`
 
@@ -558,15 +614,35 @@ Located in the `bootstrap` module (which depends on all other modules). Uses `@S
 
 Key scenarios:
 
-1. **Happy path — mid-tier match** — $10 payment, $100 balance → $89.70, 2022-03-29.
-2. **Happy path — high-tier match** — $75 payment, $500 balance → $421.25, 2022-04-25.
-3. **Happy path — low-tier match** — payment of $5 on a $50 balance.
+1. **Happy path — mid-tier match** — $10 payment, $100 balance → `newBalance = $89.70`, `nextPaymentDueDate` non-null.
+2. **Happy path — high-tier match** — $75 payment, $500 balance → `newBalance = $421.25`, `nextPaymentDueDate` non-null.
+3. **Happy path — low-tier match** — $5 payment, $50 balance → `newBalance = $44.95`.
 4. **Weekend shift** — payment on a date whose +15 falls on a Saturday, assert Monday is returned.
 5. **Validation failure** — `paymentAmount = 0` → `400`.
 6. **Validation failure** — `paymentAmount = -1` → `400`.
 7. **Account not found** — unknown `userId` → `404`.
 
-### 9.4 Coverage Gate
+### 9.4 Conditional Date for Testing
+
+The service resolves "today" through an injected `java.time.Clock` bean rather than calling `LocalDate.now()` directly inside business logic.
+
+| Context | Clock bean | Effective "today" |
+|---------|-----------|-------------------|
+| Unit tests (`ProcessPaymentServiceTest`) | `Clock.fixed(2026-04-13T12:00:00Z, UTC)` — also `2026-04-10` and `2026-04-11` for weekend-shift cases | `2026-04-13`, `2026-04-10`, `2026-04-11` respectively |
+| Unit tests (`DueDateCalculationServiceTest`) | No clock needed — service takes a `LocalDate` input directly | Parameterized with 2026-04-10 … 2026-04-16 |
+| Integration tests (`PaymentControllerIntegrationTest`) | No fixed clock — `nextPaymentDueDate` is asserted only to be **non-null** (exact date is validated at unit-test level) | Current system date at test run time |
+| Production | `Clock.systemDefaultZone()` | Current system date |
+
+> **Manual testing:** Set `app.fixed-date=YYYY-MM-DD` in your run configuration to activate a fixed clock at runtime (e.g. in Swagger UI). See §10 for exact Maven, IntelliJ, and JAR invocations.
+
+- Due-date assertions in unit tests (e.g. "payment on `2026-04-13` + 15 = `2026-04-28` (Tuesday, no shift)") are **fully deterministic** — they never break because the calendar date changed.
+- The fixed date block (`2026-04-10` → `2026-04-16`) was chosen because 15 mod 7 = 1, so successive days step neatly through all seven `DayOfWeek` outcomes in a single consecutive week.
+- The `Clock` is injected via constructor in `ProcessPaymentService`, keeping the domain layer free of any test-only concerns.
+- Integration tests deliberately avoid pinning `nextPaymentDueDate` to a specific value — the weekend-shift correctness is already proven by the unit tests; the integration layer only verifies the field is wired through end-to-end.
+
+> **See also:** The Appendix design-decision table entry "Injected `Clock` in service" for the trade-off rationale.
+
+### 9.5 Coverage Gate
 
 JaCoCo (configured in the `bootstrap` module) fails the build if line coverage drops below **80%** in:
 
@@ -604,7 +680,49 @@ spring:
     redis:
       host: localhost
       port: 6379
+
+# Optional: pin the date for manual Swagger testing of weekend due-date shifts.
+# Remove or comment out for normal local development.
+# app.fixed-date: 2026-04-17   # Friday +15 = 2026-05-02 (Sat) → shifted to 2026-05-04 (Mon)
 ```
+
+### Fixed-date run configurations
+
+`ClockConfig` activates a fixed `Clock` bean whenever `app.fixed-date` is set. This lets you manually verify the weekend shift logic via Swagger UI without waiting for the right calendar day.
+
+**IntelliJ Run Configuration (recommended on Windows — no quoting issues):**
+
+1. Open **Run → Edit Configurations → + → Spring Boot**
+2. **Main class:** `com.customercare.CustomerCareApplication`
+3. **Active profiles:** `local`
+4. **VM options:** `-Dapp.fixed-date=2026-04-17`
+5. Click **Run**
+
+**Maven — Mac / Linux:**
+
+```bash
+mvn spring-boot:run -pl bootstrap -Dspring-boot.run.profiles=local -Dspring-boot.run.jvmArguments="-Dapp.fixed-date=2026-04-17"
+```
+
+
+**Fat JAR:**
+
+```bash
+java -Dapp.fixed-date=2026-04-17 \
+     -jar bootstrap/target/bootstrap-1.0.0-SNAPSHOT.jar \
+     --spring.profiles.active=local
+```
+
+**Useful test dates** (all trigger a shift when +15 is applied):
+
+| `app.fixed-date` | Day | Raw +15 | Lands on | Shifted to |
+|-----------------|-----|---------|----------|------------|
+| `2026-04-17` | Friday | `2026-05-02` | Saturday | `2026-05-04` (Mon) |
+| `2026-04-18` | Saturday | `2026-05-03` | Sunday | `2026-05-05` (Mon) |
+| `2026-04-19` | Sunday | `2026-05-04` | Monday | `2026-05-04` (no shift) |
+
+> A `WARN` log line is emitted at startup when a fixed clock is active:
+> `*** FIXED CLOCK ACTIVE — app.fixed-date=2026-04-17 (FRIDAY). Do NOT use in production. ***`
 
 ### `application-prod.yml` (active profile: `prod`)
 
@@ -625,9 +743,22 @@ spring:
 services:
   redis:
     image: redis:7-alpine
+    container_name: customer-care-redis
     ports:
       - "6379:6379"
     command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: customer-care-redisinsight
+    ports:
+      - "5540:5540"
+    depends_on:
+      - redis
+
+volumes:
+  redis-data:
 ```
 
 ### `pom.xml` — Key Dependencies
@@ -682,6 +813,144 @@ The project uses a **parent POM** at the root with `<packaging>pom</packaging>` 
 
 ---
 
+## 11. Observability & Logging
+
+### Log levels
+
+| Package | Level | Rationale |
+|---------|-------|-----------|
+| `com.customercare` | `INFO` | Default for all application code |
+| Framework internals | `WARN` | Spring Boot default |
+
+Switch to `DEBUG` for verbose adapter-level output (Redis commands, mapper calls) without redeploying.
+
+### Structured log events — `PaymentController`
+
+Every request emits at least two INFO lines (three on an idempotency cache hit) that give ops full visibility without tailing DEBUG:
+
+| Event | Level | Fields |
+|-------|-------|--------|
+| Request received | `INFO` | `userId`, `amount`, `idempotencyKey` (or `"(none)"`) |
+| Idempotency cache hit | `INFO` | `idempotencyKey` |
+| Payment completed | `INFO` | `userId`, `prevBalance`, `newBalance`, `dueDate`, `elapsedMs` |
+
+Domain-level errors are logged at `WARN` (no stack trace); unexpected errors at `ERROR` (full stack trace, server-side only — never leaked to the client).
+
+`GET /hello` emits a single `DEBUG` line — zero INFO noise at the health-check level.
+
+### MDC correlation
+
+`userId` is placed in the [Mapped Diagnostic Context](https://logback.qos.ch/manual/mdc.html) for the entire duration of a payment request and cleaned up in a `finally` block:
+
+```java
+MDC.put("userId", request.getUserId());
+try { ... } finally { MDC.remove("userId"); }
+```
+
+Every log line emitted by downstream components (service, Redis adapter) automatically inherits this value. A single `userId` grep returns the complete trace for one request.
+
+To include `userId` in log output, add `%X{userId}` to your Logback pattern:
+
+```xml
+<pattern>%d{ISO8601} %-5level [%X{userId}] %logger{36} - %msg%n</pattern>
+```
+
+---
+
+## 12. Idempotency
+
+### Design
+
+Duplicate requests (network retries, double-clicks) are handled via an optional `Idempotency-Key` request header. The key is a client-generated string (UUID recommended) that uniquely identifies a logical operation.
+
+The flow:
+
+```
+Request arrives with Idempotency-Key
+│
+├── Key found in cache  →  return cached response immediately (no reprocessing)
+│
+└── Key NOT in cache    →  process payment
+                            store response in cache (24-hour TTL)
+                            return fresh response
+```
+
+### Components
+
+| Component | Location | Responsibility |
+|-----------|----------|----------------|
+| `IdempotencyStoreSpi` | `domain/spi` | Secondary port — defines `find(key, type)` and `store(key, value)`; no Redis knowledge |
+| Redis adapter (impl) | `infra` | Implements `IdempotencyStoreSpi`; serialises response as JSON; applies 24-hour TTL |
+| `IdempotencyGuard` | `app/idempotency` | Encapsulates the cache-check → execute → store pattern as a generic `resolve(key, type, supplier)` call |
+| `PaymentController` | `app/rest` | Passes the header value to `IdempotencyGuard.resolve()` — has no direct knowledge of how caching works |
+
+### Why a dedicated `IdempotencyGuard`?
+
+Before the extraction, the controller contained two `if (key != null && !key.isBlank())` guards and the full cache lookup/store inline. Moving this to `IdempotencyGuard` means:
+
+- The controller has a single responsibility: HTTP ↔ domain translation.
+- Idempotency behaviour (TTL, error handling, serialisation format) can change without touching the controller.
+- `IdempotencyGuard` is independently unit-testable with a mock `IdempotencyStoreSpi`.
+
+---
+
+## 13. Concurrency & Transaction Safety
+
+### The core problem
+
+`ProcessPaymentService.process()` performs a **read-modify-write** cycle:
+
+```
+1. GET   account = accountSpi.findById(userId)      ← read
+2.       newBalance = balance - payment - match      ← compute (in-memory)
+3. SET   accountSpi.save(account)                    ← write
+```
+
+Each individual Redis command (`GET`, `SET`) is atomic, but the **sequence** is not. If two concurrent requests for the same `userId` both execute step 1 before either reaches step 3, the second write silently overwrites the first — **one payment is lost**.
+
+```
+Thread A: GET balance=$100         ───────────────────────────────────────▶ SET balance=$90
+Thread B:          GET balance=$100 ───────────────────▶ SET balance=$90
+                                                        ↑ Thread A's deduction is lost
+```
+
+### Current mitigations
+
+| Mechanism | Scope | What it protects |
+|-----------|-------|------------------|
+| `InsufficientBalanceException` guard | Per-request | Prevents balance going negative within a single request |
+| `Idempotency-Key` header | Per-key | Prevents the **same** request from being processed twice (retries, double-clicks) |
+| Single-user traffic assumption | Implicit | The exercise scenario assumes one user is not making concurrent payments |
+
+Neither of these prevents two **different** concurrent requests for the **same user** from racing.
+
+### Why this is acceptable for iteration 1
+
+- The exercise is a single-endpoint coding exercise — not a production payment gateway. Concurrent payments for the same user are not in scope.
+- Adding distributed locking or Redis transactions (WATCH/MULTI) would significantly increase implementation complexity without being required by the spec.
+- The architecture already isolates persistence behind `AccountSpi`, so adding atomicity requires changing **only the infra adapter** — not the domain or app layers.
+
+### Solutions for production (iteration 2+)
+
+| Approach | Store | How it works |
+|----------|-------|--------------|
+| **Redis WATCH/MULTI** (optimistic) | Redis | `WATCH account:{userId}` → `GET` → compute → `MULTI` → `SET` → `EXEC`. If another client modified the key between `WATCH` and `EXEC`, the transaction aborts and can be retried. |
+| **Redis Lua script** (atomic) | Redis | A single Lua script runs `GET`, computes the new balance, and `SET`s it atomically on the Redis server — no round-trip race window. |
+| **Distributed lock** (pessimistic) | Redis | Acquire a lock on `payment-lock:{userId}` (e.g. Redisson `RLock`) before the read-modify-write, release in `finally`. Simple but adds latency and lock-management complexity. |
+| **`@Transactional` + `SELECT … FOR UPDATE`** | Oracle/JPA | When migrating to Oracle, annotate `ProcessPaymentService.process()` with `@Transactional`. The JPA adapter performs `SELECT * FROM accounts WHERE user_id = ? FOR UPDATE`, which acquires a row-level lock. No concurrent transaction can read stale balance until the lock is released at commit. This is the standard approach for financial systems. |
+| **Optimistic locking (`@Version`)** | Oracle/JPA | Add a `@Version` column to the `Account` entity. JPA includes `WHERE version = ?` in the `UPDATE`. If another transaction committed first, Hibernate throws `OptimisticLockException`, which the global exception handler can map to HTTP 409 (Conflict) for client retry. |
+
+### Migration checklist (Redis → Oracle)
+
+When moving to Oracle/JPA:
+
+1. Add `@Transactional` to `ProcessPaymentService.process()`.
+2. Use `SELECT … FOR UPDATE` (pessimistic) or `@Version` (optimistic) in the JPA adapter.
+3. Configure a `PlatformTransactionManager` bean (auto-configured by `spring-boot-starter-data-jpa`).
+4. Test for `OptimisticLockException` / deadlock scenarios in integration tests.
+
+---
+
 ## Appendix — Design Decisions & Trade-offs
 
 | Decision | Rationale | Alternative |
@@ -692,12 +961,14 @@ The project uses a **parent POM** at the root with `<packaging>pom</packaging>` 
 | Repository interface pattern | Enables Redis → Oracle swap by changing only the implementation class | Hardcoded Redis calls in service — blocks future migration |
 | Single `Account` model (no `User` entity) | README only requires balance tracking by `userId`; YAGNI | Full `User` + `Account` — adds complexity with no current requirement |
 | No `Payment` audit entity in iteration 1 | README asks for a response, not persistence of payment history | Persist every payment — deferred to Oracle iteration where it makes more sense |
-| Injected `Clock` in service | Full testability — unit tests pin the date to `2022-03-14`; production uses `Clock.systemDefaultZone()` | `LocalDate.now()` — simpler but untestable for date-dependent logic |
+| Injected `Clock` in service | Full testability — unit tests pin the date to `2026-04-13`; production uses `Clock.systemDefaultZone()` | `LocalDate.now()` — simpler but untestable for date-dependent logic |
 | Separate `MatchCalculationService` and `DueDateCalculationService` | Single Responsibility; each is independently unit-testable and replaceable | Inline logic in `PaymentService` — harder to test in isolation |
 | `@RestControllerAdvice` global handler | Centralised error translation; controllers stay clean | Per-controller `@ExceptionHandler` — more boilerplate |
 | `userId` in request body | Clear and explicit; works without authentication infrastructure | Path variable (`/users/{userId}/one-time-payment`) — cleaner REST but requires URL routing decisions |
 | Embedded Redis for tests | No Docker dependency in CI; tests run anywhere Maven runs | Testcontainers — closer to prod but heavier setup |
-| No `@Transactional` (Redis iteration) | Redis single-key operations (`GET`, `SET`) are inherently atomic; a Spring `@Transactional` would add overhead with no benefit. **When migrating to Oracle/JPA**, add `@Transactional` to `ProcessPaymentService.process()` and configure a `PlatformTransactionManager`. | Add `@Transactional` now — unnecessary indirection for the current Redis backend |
+| No `@Transactional` (Redis iteration) | Spring's `@Transactional` wraps a `PlatformTransactionManager` — Redis has no such manager in the current stack. Individual Redis commands are atomic but the read-modify-write **sequence** is not (see §13). The race is accepted for exercise scope. **When migrating to Oracle/JPA**, add `@Transactional` to `ProcessPaymentService.process()` with `SELECT … FOR UPDATE` or `@Version` for true isolation. | Add `@Transactional` now — no transaction manager to back it; false sense of safety |
 | `InsufficientBalanceException` guard | Prevents negative balances; returned as HTTP 422 (Unprocessable Entity) | Allow negative balance — risky in a financial domain |
 | `Idempotency-Key` header | Protects against duplicate payment submissions (network retries, double-clicks). Cached responses stored in Redis with 24-hour TTL. | No idempotency — simpler but unsafe for production payment traffic |
+| `IdempotencyGuard` extraction | Keeps controller lean — single responsibility (HTTP ↔ domain). Cache-check/execute/store logic is independently testable and changeable. | Inline `if (key != null)` guards in the controller — duplicated logic, mixed concerns |
+| No concurrency guard on balance (Redis iteration) | Single-user traffic assumption for exercise scope. The read-modify-write race on `account:{userId}` is documented in §13 with four production-ready solutions. Hexagonal architecture ensures the fix lives in the infra adapter only. | Redis WATCH/MULTI, Lua script, or distributed lock — all add significant complexity with no exercise requirement |
 

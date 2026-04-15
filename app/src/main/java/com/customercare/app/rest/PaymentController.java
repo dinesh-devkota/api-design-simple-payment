@@ -1,15 +1,15 @@
 package com.customercare.app.rest;
 
 import com.customercare.api.PaymentApi;
+import com.customercare.app.idempotency.IdempotencyGuard;
 import com.customercare.app.mapper.PaymentResponseMapper;
-import com.customercare.domain.payment.PaymentResult;
 import com.customercare.domain.payment.ProcessPaymentUseCase;
-import com.customercare.domain.spi.IdempotencyStoreSpi;
 import com.customercare.dto.OneTimePaymentRequest;
 import com.customercare.dto.OneTimePaymentResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -21,43 +21,51 @@ import org.springframework.web.bind.annotation.RestController;
  * {@code openapi.yaml}.  All Swagger/OpenAPI annotations, request mappings, and
  * response codes live on the generated interface.
  *
- * <p>This controller depends only on the domain's {@link ProcessPaymentUseCase}
- * (primary port) — it has no direct knowledge of Redis or any other infrastructure.
+ * <p>This controller has a single responsibility: translate HTTP ↔ domain.
+ * Idempotency cache logic lives in {@link IdempotencyGuard}; business rules
+ * live in {@link ProcessPaymentUseCase}.
  */
 @Slf4j
 @RestController
 @RequiredArgsConstructor
 public class PaymentController implements PaymentApi {
 
+    private static final String MDC_USER_ID = "userId";
+
     private final ProcessPaymentUseCase processPaymentUseCase;
     private final PaymentResponseMapper paymentResponseMapper;
-    private final IdempotencyStoreSpi   idempotencyStore;
+    private final IdempotencyGuard      idempotencyGuard;
 
     @Override
     public ResponseEntity<OneTimePaymentResponse> oneTimePayment(
             @Valid @RequestBody OneTimePaymentRequest request,
             String idempotencyKey) {
 
-        log.info("POST /one-time-payment userId={} amount={} idempotencyKey={}",
-                request.getUserId(), request.getPaymentAmount(), idempotencyKey);
+        long start = System.currentTimeMillis();
+        MDC.put(MDC_USER_ID, request.getUserId());
 
-        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-            var cached = idempotencyStore.find(idempotencyKey, OneTimePaymentResponse.class);
-            if (cached.isPresent()) {
-                log.info("Idempotent replay: key={}", idempotencyKey);
-                return ResponseEntity.ok(cached.get());
-            }
+        try {
+            log.info("POST /one-time-payment received: userId={} amount={} idempotencyKey={}",
+                    request.getUserId(), request.getPaymentAmount(),
+                    idempotencyKey != null ? idempotencyKey : "(none)");
+
+            OneTimePaymentResponse response = idempotencyGuard.resolve(
+                    idempotencyKey,
+                    OneTimePaymentResponse.class,
+                    () -> paymentResponseMapper.toResponse(
+                            processPaymentUseCase.process(
+                                    request.getUserId(), request.getPaymentAmount())));
+
+            log.info("POST /one-time-payment completed: userId={} prevBalance={} newBalance={} dueDate={} elapsedMs={}",
+                    request.getUserId(), response.getPreviousBalance(), response.getNewBalance(),
+                    response.getNextPaymentDueDate(), System.currentTimeMillis() - start);
+
+            return ResponseEntity.ok(response);
+
+        } finally {
+            MDC.remove(MDC_USER_ID);
         }
-
-        PaymentResult result = processPaymentUseCase.process(
-                request.getUserId(), request.getPaymentAmount());
-        OneTimePaymentResponse response = paymentResponseMapper.toResponse(result);
-
-        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-            idempotencyStore.store(idempotencyKey, response);
-        }
-
-        return ResponseEntity.ok(response);
     }
 }
+
 

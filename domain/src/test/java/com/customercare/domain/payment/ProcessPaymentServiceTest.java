@@ -31,14 +31,31 @@ import static org.mockito.Mockito.*;
  *
  * <p>{@link AccountSpi} is mocked; real calculation services are used to validate
  * tier logic end-to-end without touching infrastructure.
- * A fixed clock (March 14, 2022) is used for deterministic due-date assertions.
+ *
+ * <p>All fixed clocks use the consecutive April 2026 block so that
+ * expected dates are easy to verify on a calendar:
+ * <pre>
+ *   2026-04-13 (Monday)   + 15 = 2026-04-28 (Tuesday)   — no shift  ← default
+ *   2026-04-10 (Friday)   + 15 = 2026-04-25 (Saturday)  → 2026-04-27 (Monday)
+ *   2026-04-11 (Saturday) + 15 = 2026-04-26 (Sunday)    → 2026-04-27 (Monday)
+ * </pre>
  */
 @ExtendWith(MockitoExtension.class)
 class ProcessPaymentServiceTest {
 
-    /** Fixed to March 14, 2022 — matches the spec example. */
+    /** Fixed to 2026-04-13 (Monday) — +15 = 2026-04-28 (Tuesday, no shift). */
     private static final Clock FIXED_CLOCK = Clock.fixed(
-            ZonedDateTime.of(2022, 3, 14, 12, 0, 0, 0, ZoneId.of("UTC")).toInstant(),
+            ZonedDateTime.of(2026, 4, 13, 12, 0, 0, 0, ZoneId.of("UTC")).toInstant(),
+            ZoneId.of("UTC"));
+
+    /** Fixed to 2026-04-10 (Friday) — +15 = 2026-04-25 (Saturday) → shifted to 2026-04-27 (Monday). */
+    private static final Clock CLOCK_SATURDAY = Clock.fixed(
+            ZonedDateTime.of(2026, 4, 10, 12, 0, 0, 0, ZoneId.of("UTC")).toInstant(),
+            ZoneId.of("UTC"));
+
+    /** Fixed to 2026-04-11 (Saturday) — +15 = 2026-04-26 (Sunday) → shifted to 2026-04-27 (Monday). */
+    private static final Clock CLOCK_SUNDAY = Clock.fixed(
+            ZonedDateTime.of(2026, 4, 11, 12, 0, 0, 0, ZoneId.of("UTC")).toInstant(),
             ZoneId.of("UTC"));
 
     @Mock
@@ -90,14 +107,50 @@ class ProcessPaymentServiceTest {
     }
 
     @Test
-    @DisplayName("nextPaymentDueDate = March 29, 2022 (15 days from March 14, Tuesday — no shift)")
-    void process_dueDatePresent() {
+    @DisplayName("nextPaymentDueDate = 2026-04-28 (15 days from 2026-04-13 Monday — no shift)")
+    void process_dueDateNoShift() {
         when(accountSpi.findById("user-1"))
                 .thenReturn(Optional.of(new Account("user-1", new BigDecimal("100.00"))));
         when(accountSpi.save(any(Account.class))).thenAnswer(inv -> inv.getArgument(0));
 
         assertThat(useCase.process("user-1", new BigDecimal("10.00")).nextPaymentDueDate())
-                .isEqualTo(LocalDate.of(2022, 3, 29));
+                .isEqualTo(LocalDate.of(2026, 4, 28));
+    }
+
+    @Test
+    @DisplayName("Weekend shift — +15 lands on Saturday (2026-04-25), shifted to Monday (2026-04-27)")
+    void process_dueDateSaturdayShiftedToMonday() {
+        ProcessPaymentUseCase satUseCase = new ProcessPaymentService(
+                accountSpi,
+                new MatchCalculationServiceImpl(),
+                new DueDateCalculationServiceImpl(),
+                CLOCK_SATURDAY);
+        when(accountSpi.findById("user-1"))
+                .thenReturn(Optional.of(new Account("user-1", new BigDecimal("100.00"))));
+        when(accountSpi.save(any(Account.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        PaymentResult result = satUseCase.process("user-1", new BigDecimal("10.00"));
+
+        assertThat(result.paymentDate()).isEqualTo(LocalDate.of(2026, 4, 10));
+        assertThat(result.nextPaymentDueDate()).isEqualTo(LocalDate.of(2026, 4, 27));
+    }
+
+    @Test
+    @DisplayName("Weekend shift — +15 lands on Sunday (2026-04-26), shifted to Monday (2026-04-27)")
+    void process_dueDateSundayShiftedToMonday() {
+        ProcessPaymentUseCase sunUseCase = new ProcessPaymentService(
+                accountSpi,
+                new MatchCalculationServiceImpl(),
+                new DueDateCalculationServiceImpl(),
+                CLOCK_SUNDAY);
+        when(accountSpi.findById("user-1"))
+                .thenReturn(Optional.of(new Account("user-1", new BigDecimal("100.00"))));
+        when(accountSpi.save(any(Account.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        PaymentResult result = sunUseCase.process("user-1", new BigDecimal("10.00"));
+
+        assertThat(result.paymentDate()).isEqualTo(LocalDate.of(2026, 4, 11));
+        assertThat(result.nextPaymentDueDate()).isEqualTo(LocalDate.of(2026, 4, 27));
     }
 
     // -------------------------------------------------------------------------
